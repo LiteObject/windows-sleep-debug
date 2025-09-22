@@ -46,7 +46,7 @@ All outputs are saved to a chosen folder, with timestamped filenames.
 Set-ExecutionPolicy Bypass -Scope Process -Force
 ```
 
-4) Run the script. By default, outputs go to your Desktop:
+4) Run the script. By default, outputs go to a `reports` folder next to the script:
 
 ```powershell
 .\SleepDebug.ps1
