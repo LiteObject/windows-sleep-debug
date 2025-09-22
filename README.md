@@ -49,14 +49,13 @@ Set-ExecutionPolicy Bypass -Scope Process -Force
 4) Run the script. By default, outputs go to your Desktop:
 
 ```powershell
-.\n+SleepDebug.ps1
+.\SleepDebug.ps1
 ```
 
 5) Or choose a custom output folder with `-OutDir`:
 
 ```powershell
-.
-SleepDebug.ps1 -OutDir "D:\\Temp\\SleepDebug"
+.\SleepDebug.ps1 -OutDir "D:\Temp\SleepDebug"
 ```
 
 The script will create the folder if it doesn't exist and print the resolved path.
