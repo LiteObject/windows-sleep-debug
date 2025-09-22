@@ -26,7 +26,6 @@ try {
     Write-Warning "Failed to create or access output directory: '$OutDir'. Error: $($_.Exception.Message)"
     exit 1
 }
-Write-DiagnosticOutput "Output directory: $OutDir"
 
 $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 
@@ -36,9 +35,11 @@ $diagnosticReport = Join-Path $OutDir ("SleepDebug-Report-" + $timestamp + ".txt
 # Function to write to both console and file
 function Write-DiagnosticOutput {
     param([string]$Message)
-    Write-DiagnosticOutput $Message
+    Write-Output $Message
     Add-Content -Path $diagnosticReport -Value $Message -Encoding UTF8
 }
+
+Write-DiagnosticOutput "Output directory: $OutDir"
 
 # Initialize the diagnostic report
 Write-DiagnosticOutput "Windows Sleep Debug Report"
