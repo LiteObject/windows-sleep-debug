@@ -1,0 +1,8 @@
+# Exclude reports folder created by SleepDebug.ps1
+reports/
+
+# Common PowerShell and Windows files
+*.log
+*.tmp
+Thumbs.db
+desktop.ini
