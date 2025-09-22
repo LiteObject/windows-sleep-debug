@@ -30,6 +30,78 @@ Write-Output "Output directory: $OutDir"
 
 $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 
+Write-Output "=== 0. System Information ==="
+try {
+    $computerSystem = Get-CimInstance Win32_ComputerSystem
+    $bios = Get-CimInstance Win32_BIOS
+    $os = Get-CimInstance Win32_OperatingSystem
+    $processor = Get-CimInstance Win32_Processor | Select-Object -First 1
+    $motherboard = Get-CimInstance Win32_BaseBoard
+    
+    Write-Output "Computer: $($computerSystem.Name)"
+    Write-Output "Manufacturer: $($computerSystem.Manufacturer)"
+    Write-Output "Model: $($computerSystem.Model)"
+    Write-Output "System Type: $($computerSystem.SystemType)"
+    Write-Output "Total Physical Memory: $([math]::Round($computerSystem.TotalPhysicalMemory / 1GB, 2)) GB"
+    Write-Output ""
+    Write-Output "BIOS: $($bios.Manufacturer) $($bios.Name)"
+    Write-Output "BIOS Version: $($bios.SMBIOSBIOSVersion)"
+    Write-Output "BIOS Date: $($bios.ReleaseDate)"
+    Write-Output ""
+    Write-Output "OS: $($os.Caption) $($os.Version) Build $($os.BuildNumber)"
+    Write-Output "OS Architecture: $($os.OSArchitecture)"
+    Write-Output "Install Date: $($os.InstallDate)"
+    Write-Output "Last Boot: $($os.LastBootUpTime)"
+    Write-Output ""
+    Write-Output "Processor: $($processor.Name)"
+    Write-Output "Cores: $($processor.NumberOfCores) / Logical: $($processor.NumberOfLogicalProcessors)"
+    Write-Output "Max Clock: $($processor.MaxClockSpeed) MHz"
+    Write-Output ""
+    Write-Output "Motherboard: $($motherboard.Manufacturer) $($motherboard.Product)"
+    Write-Output "MB Version: $($motherboard.Version)"
+    Write-Output "MB Serial: $($motherboard.SerialNumber)"
+} catch { Write-Warning "Could not query system information: $($_.Exception.Message)" }
+Write-Output "`n"
+
+Write-Output "=== 0b. Power Capabilities and Features ==="
+try {
+    # System power capabilities
+    Write-Output "System Power Capabilities:"
+    $powerCaps = powercfg /a
+    Write-Output $powerCaps
+    Write-Output ""
+    
+    # Modern Standby support
+    $connectedStandby = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Power" -Name CsEnabled -ErrorAction SilentlyContinue
+    if ($connectedStandby) {
+        Write-Output "Connected Standby (Modern Standby): $($connectedStandby.CsEnabled -eq 1)"
+    } else {
+        Write-Output "Connected Standby (Modern Standby): Not supported/configured"
+    }
+    
+    # Hibernate support
+    $hibernateEnabled = (powercfg /a | Select-String "Hibernate").Count -gt 0
+    Write-Output "Hibernate Available: $hibernateEnabled"
+    
+    # Platform role
+    try {
+        $platformRole = Get-CimInstance Win32_ComputerSystem | Select-Object -ExpandProperty PCSystemType
+        $roleText = switch($platformRole) {
+            0 { "Unspecified" }
+            1 { "Desktop" }
+            2 { "Mobile/Laptop" }
+            3 { "Workstation" }
+            4 { "Enterprise Server" }
+            5 { "Small Office Server" }
+            6 { "Appliance PC" }
+            8 { "Tablet" }
+            default { "Unknown ($platformRole)" }
+        }
+        Write-Output "System Role: $roleText"
+    } catch { }
+} catch { Write-Warning "Could not query power capabilities: $($_.Exception.Message)" }
+Write-Output "`n"
+
 Write-Output "=== 1. Last Wake Event ==="
 powercfg /lastwake
 Write-Output "`n"
@@ -73,11 +145,62 @@ Write-Output "`n"
 
 Write-Output "=== 8. Display/GPU and Monitor Info ==="
 try {
-    Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion, DriverDate, PNPDeviceID, Status | Format-Table -AutoSize
+    Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion, DriverDate, PNPDeviceID, Status, VideoMemoryType, AdapterRAM | Format-Table -AutoSize
 } catch { Write-Warning "Could not query Win32_VideoController: $($_.Exception.Message)" }
 try {
     Get-PnpDevice -Class Display, Monitor | Select-Object Class, FriendlyName, Status, InstanceId | Format-Table -AutoSize
 } catch { Write-Warning "Could not query PnP devices (Display/Monitor): $($_.Exception.Message)" }
+Write-Output "`n"
+
+Write-Output "=== 8b. Memory and Storage Information ==="
+try {
+    # Memory modules
+    Write-Output "Memory Modules:"
+    $memory = Get-CimInstance Win32_PhysicalMemory
+    foreach ($mem in $memory) {
+        $size = [math]::Round($mem.Capacity / 1GB, 2)
+        Write-Output "  $($mem.DeviceLocator): $size GB $($mem.MemoryType) @ $($mem.Speed) MHz"
+        Write-Output "    Manufacturer: $($mem.Manufacturer), P/N: $($mem.PartNumber)"
+    }
+    Write-Output ""
+    
+    # Storage devices
+    Write-Output "Storage Devices:"
+    $disks = Get-CimInstance Win32_DiskDrive
+    foreach ($disk in $disks) {
+        $size = [math]::Round($disk.Size / 1GB, 2)
+        Write-Output "  $($disk.Model): $size GB"
+        Write-Output "    Interface: $($disk.InterfaceType), Status: $($disk.Status)"
+    }
+} catch { Write-Warning "Could not query memory/storage: $($_.Exception.Message)" }
+Write-Output "`n"
+
+Write-Output "=== 8b. Display Adapter Power Settings ==="
+try {
+    # Check for GPU-specific power settings
+    $gpuDevices = Get-PnpDevice -Class Display | Where-Object {$_.Status -eq 'OK'}
+    foreach ($gpu in $gpuDevices) {
+        $deviceId = $gpu.InstanceId
+        Write-Output "GPU: $($gpu.FriendlyName)"
+        
+        # Check if device can wake system
+        $wakeEnabled = Get-CimInstance -ClassName MSPower_DeviceWakeEnable -Namespace root/wmi -ErrorAction SilentlyContinue | 
+            Where-Object {$_.InstanceName -like "*$($deviceId.Replace('\','\\'))*"}
+        if ($wakeEnabled) {
+            Write-Output "  Wake Enabled: $($wakeEnabled.Enable)"
+        }
+        
+        # Get power management capabilities
+        try {
+            $powerCaps = Get-CimInstance -ClassName Win32_PnPEntity -ErrorAction SilentlyContinue | 
+                Where-Object {$_.PNPDeviceID -eq $deviceId} | 
+                Select-Object -ExpandProperty PowerManagementCapabilities
+            if ($powerCaps) {
+                Write-Output "  Power Capabilities: $($powerCaps -join ', ')"
+            }
+        } catch { }
+    }
+} catch { Write-Warning "Could not query GPU power settings: $($_.Exception.Message)" }
 Write-Output "`n"
 
 Write-Output "=== 9. USB & Sleep Settings (powercfg query) ==="
@@ -135,6 +258,31 @@ if ($allLogs.Count -gt 0) {
 }
 Write-Output "`n"
 
+Write-Output "=== 11b. Wake History Analysis ==="
+try {
+    # Get the last 10 wake events
+    $wakeEvents = Get-WinEvent -FilterHashtable @{
+        LogName = 'System'
+        ProviderName = 'Microsoft-Windows-Power-Troubleshooter'
+        ID = 1
+    } -MaxEvents 10 -ErrorAction SilentlyContinue
+    
+    if ($wakeEvents) {
+        Write-Output "Recent Wake Events:"
+        foreach ($wakeEvent in $wakeEvents) {
+            $msg = $wakeEvent.Message
+            if ($msg -match "Wake Source: (.+)") {
+                Write-Output "  $(Get-Date $wakeEvent.TimeCreated -Format 'yyyy-MM-dd HH:mm:ss'): $($matches[1])"
+            } else {
+                Write-Output "  $(Get-Date $wakeEvent.TimeCreated -Format 'yyyy-MM-dd HH:mm:ss'): $($msg.Split([Environment]::NewLine)[0])"
+            }
+        }
+    } else {
+        Write-Output "No recent wake events found."
+    }
+} catch { Write-Warning "Could not analyze wake history: $($_.Exception.Message)" }
+Write-Output "`n"
+
 Write-Output "=== 12. BIOS/UEFI Wake Enable (device capabilities) ==="
 try {
     Get-CimInstance -Namespace root/WMI -ClassName MSPower_DeviceWakeEnable | Select-Object InstanceName, Enable | Format-Table -AutoSize
@@ -169,5 +317,136 @@ Write-Output "   Device Manager > device Properties > Power Management > uncheck
 Write-Output ""
 Write-Output "6) If Event 41 persists with Checkpoint ~16, suspect resume/graphics handoff. Try a different cable/port, BIOS update, and disable C-states/ERP only for testing."
 Write-Output ""
+
+Write-Output "=== 15. Network Adapter Power Settings ==="
+try {
+    $netAdapters = Get-NetAdapter | Where-Object {$_.Status -eq 'Up'}
+    foreach ($adapter in $netAdapters) {
+        Write-Output "Adapter: $($adapter.Name) [$($adapter.InterfaceDescription)]"
+        Write-Output "  Driver: $($adapter.DriverInformation.DriverProvider) v$($adapter.DriverInformation.DriverVersion)"
+        Write-Output "  Date: $($adapter.DriverInformation.DriverDate)"
+        Write-Output "  Link Speed: $($adapter.LinkSpeed)"
+        
+        # Check WOL settings
+        try {
+            $wolSettings = Get-NetAdapterPowerManagement -Name $adapter.Name -ErrorAction SilentlyContinue
+            if ($wolSettings) {
+                Write-Output "  WOL Magic Packet: $($wolSettings.WakeOnMagicPacket)"
+                Write-Output "  Wake on Pattern: $($wolSettings.WakeOnPattern)"
+                Write-Output "  Device Sleep on Disconnect: $($wolSettings.DeviceSleepOnDisconnect)"
+            }
+        } catch { }
+        
+        # Check if device can wake system
+        try {
+            $deviceWake = powercfg /devicequery wake_armed | Where-Object {$_ -like "*$($adapter.InterfaceDescription)*"}
+            if ($deviceWake) {
+                Write-Output "  Can Wake System: YES"
+            } else {
+                Write-Output "  Can Wake System: NO"
+            }
+        } catch { }
+        Write-Output ""
+    }
+} catch { Write-Warning "Could not query network adapter settings: $($_.Exception.Message)" }
+Write-Output "`n"
+
+Write-Output "=== 16. USB Controllers and Devices ==="
+try {
+    # USB Controllers
+    Write-Output "USB Controllers:"
+    $usbControllers = Get-CimInstance Win32_USBController
+    foreach ($ctrl in $usbControllers) {
+        Write-Output "  $($ctrl.Name)"
+        Write-Output "    Status: $($ctrl.Status), PNP ID: $($ctrl.PNPDeviceID)"
+    }
+    Write-Output ""
+    
+    # USB Devices with wake capability
+    Write-Output "USB Devices (Wake Capable):"
+    $usbDevices = Get-PnpDevice -Class USB | Where-Object {$_.Status -eq 'OK'}
+    $wakeArmed = powercfg /devicequery wake_armed
+    foreach ($usb in $usbDevices) {
+        $canWake = $wakeArmed | Where-Object {$_ -like "*$($usb.FriendlyName)*"}
+        if ($canWake) {
+            Write-Output "  $($usb.FriendlyName) - CAN WAKE"
+        }
+    }
+} catch { Write-Warning "Could not query USB information: $($_.Exception.Message)" }
+Write-Output "`n"
+
+Write-Output "=== 16. Connected Display Information ==="
+try {
+    # Get monitor connection info
+    $monitors = Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorBasicDisplayParams -ErrorAction SilentlyContinue
+    if ($monitors) {
+        foreach ($mon in $monitors) {
+            Write-Output "Monitor Instance: $($mon.InstanceName)"
+            Write-Output "  Active: $($mon.Active)"
+            Write-Output "  Display Type: $(switch($mon.VideoInputType){0{'Analog'};1{'Digital'};default{'Unknown'}})"
+        }
+    } else {
+        Write-Output "No WMI monitor information available."
+    }
+    
+    # Get additional display info
+    $displayDevices = Get-CimInstance Win32_DesktopMonitor -ErrorAction SilentlyContinue
+    if ($displayDevices) {
+        Write-Output ""
+        Write-Output "Desktop Monitor Information:"
+        foreach ($display in $displayDevices) {
+            Write-Output "  Name: $($display.Name)"
+            Write-Output "  Status: $($display.Status)"
+            Write-Output "  PNP Device ID: $($display.PNPDeviceID)"
+        }
+    }
+} catch { Write-Warning "Could not query monitor information: $($_.Exception.Message)" }
+Write-Output "`n"
+
+Write-Output "=== 17. Chipset and Platform Information ==="
+try {
+    # Chipset information
+    Write-Output "System Devices:"
+    $systemDevices = Get-CimInstance Win32_SystemDriver | Where-Object {$_.Name -match "Intel|AMD|NVIDIA|Realtek|Broadcom"} | Select-Object Name, State, Status | Sort-Object Name
+    if ($systemDevices) {
+        $systemDevices | Format-Table -AutoSize
+    }
+    
+    # PCI devices (key system components)
+    Write-Output "Key PCI Devices:"
+    $pciDevices = Get-CimInstance Win32_PnPEntity | Where-Object {
+        $_.PNPDeviceID -like "PCI\*" -and 
+        ($_.Name -match "Intel|AMD|NVIDIA|Realtek|Broadcom|Controller|Bridge")
+    } | Select-Object Name, Status, PNPDeviceID | Sort-Object Name
+    
+    if ($pciDevices) {
+        foreach ($dev in $pciDevices) {
+            Write-Output "  $($dev.Name) - $($dev.Status)"
+        }
+    }
+} catch { Write-Warning "Could not query chipset information: $($_.Exception.Message)" }
+Write-Output "`n"
+
+Write-Output "=== 18. Recent Critical Events ==="
+try {
+    # Get recent critical events that might indicate hardware issues
+    $criticalEvents = Get-WinEvent -FilterHashtable @{
+        LogName = 'System'
+        Level = 1,2  # Critical and Error
+        StartTime = (Get-Date).AddDays(-3)
+    } -MaxEvents 20 -ErrorAction SilentlyContinue | 
+    Where-Object {$_.ProviderName -match "Kernel|Hardware|PnP|Power|Display|USB|Disk"}
+    
+    if ($criticalEvents) {
+        Write-Output "Recent Critical/Error Events (last 3 days):"
+        foreach ($critEvent in $criticalEvents) {
+            Write-Output "  $(Get-Date $critEvent.TimeCreated -Format 'MM-dd HH:mm') ID:$($critEvent.Id) $($critEvent.ProviderName)"
+            Write-Output "    $($critEvent.LevelDisplayName): $($critEvent.Message.Split([Environment]::NewLine)[0])"
+        }
+    } else {
+        Write-Output "No recent critical events found."
+    }
+} catch { Write-Warning "Could not query recent events: $($_.Exception.Message)" }
+Write-Output "`n"
 
 Write-Output "=== Debug Info Collection Completed ==="
