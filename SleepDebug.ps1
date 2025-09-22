@@ -15,7 +15,8 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 
 # 0b. Resolve output directory and timestamp
 if (-not $OutDir -or $OutDir.Trim() -eq "") {
-    $OutDir = Join-Path $env:USERPROFILE 'Desktop'
+    $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $OutDir = Join-Path $scriptRoot 'reports'
 }
 try {
     if (-not (Test-Path -LiteralPath $OutDir)) {
@@ -51,9 +52,13 @@ Write-Output "`n"
 
 Write-Output "=== 5. Generating Sleep Study Report ==="
 $SleepReport = Join-Path $OutDir ("sleepstudy-report-" + $timestamp + ".html")
-powercfg /sleepstudy
-Copy-Item "C:\Windows\System32\sleepstudy-report.html" $SleepReport -Force
-Write-Output "Sleep Study saved to: $SleepReport"
+powercfg /sleepstudy /output $SleepReport
+if (Test-Path $SleepReport) {
+    Write-Output "Sleep Study saved to: $SleepReport"
+} else {
+    Write-Warning "Sleep Study report could not be generated (may not be supported on this system)"
+    Write-Output "Modern Standby/Connected Standby may not be available on this system."
+}
 Write-Output "`n"
 
 Write-Output "=== 6. Generating Energy Report (60s wait) ==="
